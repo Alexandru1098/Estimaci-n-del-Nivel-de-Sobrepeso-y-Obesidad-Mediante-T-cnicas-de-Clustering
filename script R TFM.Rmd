@@ -1,0 +1,652 @@
+---
+title: "Estimación del Nivel de Sobrepeso y Obesidad Mediante Técnicas de Clustering"
+author: "Alexandru Iasmin Popa Maris"
+date: "2024-04-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Librerias
+```{r}
+library(DataExplorer)
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+library(caret)
+library(fastDummies)
+library(outliers)
+library(nortest)
+library(MASS)
+library(dplyr)
+library(plotly)
+library(dbscan)
+library(factoextra)
+library(cowplot)
+library(emmeans)
+library(dunn.test)
+library(ggpubr)
+library(FSA)
+library(rstatix)
+library(corrplot)
+library(ggpubr)
+library(car)
+```
+### Procesamiento Datos
+
+#Carga de datos y previsualización
+
+Cargamos la base de datos
+```{r}
+#Cargamos la base de datos. Para ello se descarga el fichero desde https://archive.ics.uci.edu/dataset/544/estimation+of+obesity+levels+based+on+eating+habits+and+physical+condition 
+#y se añade la ruta al archivo .csv
+ObesityDS <- read.csv("C:/Users/Alex/Desktop/ObesityDataSet_raw_and_data_sinthetic.csv")
+
+#Revisamos los datos
+#View(ObesityDS)
+str(ObesityDS)
+summary(ObesityDS)
+```
+#Cambio nomenclatura
+
+Cambiamos los nombres de las variables y los factores
+```{r}
+# Renombramos las columnas usando dplyr::rename()
+ObesityDS <- ObesityDS %>%
+  rename(
+    Genero = Gender,
+    Edad = Age,
+    Altura = Height,
+    Peso = Weight,
+    HFSP = family_history_with_overweight,
+    FCHC = FAVC,
+    FCV = FCVC,
+    NCP = NCP,
+    CAEC = CAEC,
+    FUMAR = SMOKE,
+    CH2O = CH2O,
+    SCC = SCC,
+    FAF = FAF,
+    TUE = TUE,
+    CALC = CALC,
+    MTRANS = MTRANS,
+    NOBE = NObeyesdad
+  )
+```
+
+```{r}
+# Cambiamos los valores de los factores
+
+# Factor "Genero"
+ObesityDS$Genero <- factor(ObesityDS$Genero,
+                      levels = c("Male", "Female"),
+                      labels = c("Masculino", "Femenino"))
+
+# Factor "HFSP" (Historial familiar de sobrepeso)
+ObesityDS$HFSP <- factor(ObesityDS$HFSP,
+                    levels = c("yes", "no"),
+                    labels = c("Si", "No"))
+
+# Factor "FCHC" (Frecuencia de consumo de comida hipercalórica)
+ObesityDS$FCHC <- factor(ObesityDS$FCHC,
+                    levels = c("yes", "no"),
+                    labels = c("Si", "No"))
+
+# Factor "CAEC" (Consumo de alimentos entre comidas)
+ObesityDS$CAEC <- factor(ObesityDS$CAEC,
+                    levels = c("no", "Sometimes", "Frequently", "Always"),
+                    labels = c("No", "A_veces", "Frecuentemente", "Siempre"))
+
+# Factor "FUMAR" 
+ObesityDS$FUMAR <- factor(ObesityDS$FUMAR,
+                     levels = c("yes", "no"),
+                     labels = c("Si", "No"))
+
+# Factor "SCC" (Monitoriza el consumo de calorías)
+ObesityDS$SCC <- factor(ObesityDS$SCC,
+                   levels = c("yes", "no"),
+                   labels = c("Si", "No"))
+
+# Factor "CALC" (Frecuencia de consumo de alcohol)
+ObesityDS$CALC <- factor(ObesityDS$CALC,
+                    levels = c("no", "Sometimes", "Frequently", "Always"),
+                    labels = c("No", "A_veces", "Frecuentemente", "Siempre"))
+
+# Factor "MTRANS" (Medio de transporte más utilizado)
+ObesityDS$MTRANS <- factor(ObesityDS$MTRANS,
+                      levels = c("Automobile", "Motorbike", "Bike", "Public_Transportation", "Walking"),
+                      labels = c("Automovil", "Motocicleta", "Bicicleta", "Transporte_publico", "Caminando"))
+
+# Factor "NOBE" (Nivel de obesidad)
+ObesityDS$NOBE <- factor(ObesityDS$NOBE,
+                    levels = c("Insufficient_Weight", "Normal_Weight", "Overweight_Level_I", "Overweight_Level_II", "Obesity_Type_I", "Obesity_Type_II", "Obesity_Type_III"),
+                    labels = c("Peso_insuficiente", "Normopeso", "Sobrepeso_Nivel_I","Sobrepeso_Nivel_II", "Obesidad_Tipo_I", "Obesidad_Tipo_II", "Obesidad_Tipo_III"))
+
+```
+
+#Ajuste Nivel Obesidad 
+
+Calculamos una nueva variable IMC según la fórmula
+```{r}
+# Cálculo de IMC
+ObesityDS <- ObesityDS %>%
+  mutate(IMC = Peso / (Altura^2))
+```
+
+Vemos que hay un desarreglo en la variable NOBE según el IMC
+```{r}
+# Definimos la paleta de colores
+colores_personalizados <- c(
+  "Peso_insuficiente" = "#E7EBC5",  
+  "Normopeso" = "#A78682",        
+  "Sobrepeso_Nivel_I" = "#FFD700",     
+  "Sobrepeso_Nivel_II" = "#FAAC40",
+  "Obesidad_Tipo_I" = "#440E59",   
+  "Obesidad_Tipo_II" = "#35628F",   
+  "Obesidad_Tipo_III" = "#3AAE86"   
+)
+
+# Creamos el dotplot
+ggplot(ObesityDS, aes(x = IMC, fill = NOBE)) +
+  geom_dotplot(binwidth = 1, stackdir = "center", stackratio = 0.7, dotsize = 0.5, alpha = 0.8) +
+  scale_fill_manual(values = colores_personalizados) +
+  labs(
+    title = "Dot plot de IMC según nivel de obesidad sin corregir",
+    x = "IMC",
+    y = "Conteo de puntos",
+    fill = "Nivel de obesidad"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+```
+
+```{r}
+# Definimos la paleta de colores
+colores_personalizados <- c(
+  "Peso_insuficiente" = "#E7EBC5",  
+  "Normopeso" = "#A78682",        
+  "Sobrepeso" = "#FFD700",     
+  "Obesidad_Tipo_I" = "#440E59",   
+  "Obesidad_Tipo_II" = "#35628F",   
+  "Obesidad_Tipo_III" = "#3AAE86"   
+)
+# Reclasificamos NOBE según los valores de IMC
+ObesityDS <- ObesityDS %>%
+  mutate(NOBE = case_when(
+    IMC < 18.5 ~ "Peso_insuficiente",
+    IMC >= 18.5 & IMC < 25 ~ "Normopeso",
+    IMC >= 25 & IMC < 30 ~ "Sobrepeso",
+    IMC >= 30 & IMC < 35 ~ "Obesidad_Tipo_I",
+    IMC >= 35 & IMC < 40 ~ "Obesidad_Tipo_II",
+    IMC >= 40 ~ "Obesidad_Tipo_III",
+  ))
+
+# Creamos el dot plot
+ggplot(ObesityDS, aes(x = IMC, fill = NOBE)) +
+    geom_dotplot(binwidth = 1, stackdir = "center", stackratio = 0.7, dotsize = 0.5, alpha = 0.8) +  # Dot plot con puntos agrupados
+    scale_fill_manual(values = colores_personalizados) +
+    labs(title = "Dot plot de IMC según nivel de obesidad corregido",
+         x = "IMC",
+         y = "Conteo de puntos",
+         fill = "Nivel de obesidad") +
+    theme_minimal() +
+    theme(legend.position = "right")
+
+```
+
+#Filtrado de datos
+
+Eliminamos los datos con NOBE con valor de "Peso_insuficiente" (Peso Insuficiente) y "Normopeso" (Normopeso) puesto que no los trataremos en este trabajo
+
+```{r}
+ObesityDS <- ObesityDS %>%
+  filter(NOBE != "Peso_insuficiente")
+
+ObesityDS <- ObesityDS %>%
+  filter(NOBE != "Normopeso")
+```
+
+##ANÁLISIS EXPLORATORIO
+
+Usaremos la libreria DataExplorer para realizar un análisis exploratorio de los datos
+
+```{r}
+#Análisis generales
+t(introduce(ObesityDS))
+plot_intro(ObesityDS)
+
+#Diagrama de barras
+plot_bar(ObesityDS)
+
+#Histograma
+plot_histogram(ObesityDS)
+
+#Correlaciones
+plot_correlation(na.omit(ObesityDS))
+```
+Generamos una matriz de correlaciones ya que la proporcionada es poco legible
+```{r}
+matriz_ObesityDS <- data.matrix(ObesityDS, rownames.force = NA)
+O <- cor(matriz_ObesityDS)
+corrplot(O, method = "number", number.cex = 0.5, order="hclust", tl.cex=0.5)
+```
+
+Realizamos un resumen de todas las variables 
+```{r}
+summary(ObesityDS)
+```
+
+##TRATAMIENTO DATOS
+
+#valores atípicos
+
+Revisamos si hay valores atípicos mediante un boxplot
+```{r}
+variables_continuas <- ObesityDS %>%
+  select(Altura, Peso, FCV, NCP, CH2O, FAF, TUE)
+
+boxplot(variables_continuas, main="Boxplots para detectar valores atípicos", las=2,col = "#440E59")
+```
+
+Creamos una función que cuente los valores atípicos para saber la proporción de estos frente la base de datos total. Seguidamente decidimos eliminar los outliers de Altura y Peso al tener un porcentaje muy reducido.
+```{r}
+# Función para contar valores atípicos
+count_outliers <- function(x) {
+  IQR <- IQR(x)
+  cota_inferior <- quantile(x, 0.25) - 1.5 * IQR
+  cota_superior <- quantile(x, 0.75) + 1.5 * IQR
+  sum(x < cota_inferior | x > cota_superior)
+}
+
+# Seleccionamos las variables contínuas
+variables_continuas <- ObesityDS %>%
+  select(Altura, Peso, FCV, NCP, CH2O, FAF, TUE)
+
+# Contamos los valores atípicos
+numero_outliers <- sapply(variables_continuas, count_outliers)
+porcentaje_outliers <- (numero_outliers / nrow(variables_continuas)) * 100
+
+# Mostramos el número y porcentaje de valores atípicos para cada variable
+print(numero_outliers)
+print(porcentaje_outliers)
+
+# Filtramos y eliminamos valores atípicos de Altura y Peso
+remove_outliers <- function(datos, column) {
+  IQR <- IQR(datos[[column]])
+  cota_inferior <- quantile(datos[[column]], 0.25) - 1.5 * IQR
+  cota_superior <- quantile(datos[[column]], 0.75) + 1.5 * IQR
+  datos %>%
+    filter(datos[[column]] >= cota_inferior & datos[[column]] <= cota_superior)
+}
+
+ObesityDS_no <- ObesityDS %>%
+  remove_outliers("Altura") %>%
+  remove_outliers("Peso")
+```
+Generamos un gráfico de barras con la proporción de valores atípicos
+```{r}
+
+variables <- c("Altura", "Peso", "FCV", "NCP", "CH2O", "FAF", "TUE")
+
+# Crear un data frame
+data <- data.frame(Variable = factor(variables, levels = variables), Porcentaje = porcentaje_outliers)
+
+ggplot(data, aes(x = Variable, y = Porcentaje)) +
+  geom_bar(stat = "identity", fill = "#FFD700") +
+  geom_text(aes(label = sprintf("%.2f%%", Porcentaje)), vjust = -0.5) + 
+  labs(title = "Porcentaje de Valores Outliers por Variable",
+       x = "Variable",
+       y = "Porcentaje de Outliers") +
+  theme_minimal(base_size = 15)
+```
+
+Hacemos un QQ-Plot y un histograma con las variables contínuas 
+```{r}
+variables_continuas <- ObesityDS[, c("FCV", "NCP", "CH2O", "FAF", "TUE")]
+
+plot_histogram(variables_continuas)
+plot_qq(variables_continuas)
+```
+
+#Transformación y Estandarización
+
+Realizamos la normalización y estandarización de las variables contínuas. Cabe destacar que Edad, Weigth y Heigth no las transformaremos puesto que no la usaremos a la hora de aplicar el método de Clústering
+```{r}
+# Creamos una copia de la base de datos, para normalizar las variables contínuas
+ObesityDS_nno <- ObesityDS_no
+
+# Generamos la lista de variables a las que les aplicaremos Box-Cox
+variables_boxcox <- c("CH2O", "FAF", "FCV", "NCP", "TUE")
+
+# Aplicamos la transformación Box-Cox añadiendo una pequeña constante para evitar ceros o valores negativos
+for (var in variables_boxcox) {
+  ObesityDS_nno[[var]] <- ObesityDS_nno[[var]] +         min(ObesityDS_nno[[var]][ObesityDS_nno[[var]] > 0]) / 2
+  variables_transformadas_boxcox <- boxcox(as.formula(paste(var, "~ 1")), data = ObesityDS_nno)
+  lambda_opt <- variables_transformadas_boxcox$x[which.max(variables_transformadas_boxcox$y)]
+  ObesityDS_nno[[var]] <- (ObesityDS_nno[[var]]^lambda_opt - 1) / lambda_opt
+}
+```
+
+Revisamos mediante el test de Shapiro.Wilks si se ha mejorado la normalidad o no. Si no se ha mejorado, revertimos los cambios
+```{r}
+shapiro.test(ObesityDS_nno$FCV)
+shapiro.test(ObesityDS_no$FCV)# <- Mejor
+
+shapiro.test(ObesityDS_nno$NCP) #<- Mejor
+shapiro.test(ObesityDS_no$NCP)
+
+shapiro.test(ObesityDS_nno$CH2O) #<- Mejor
+shapiro.test(ObesityDS_no$CH2O)
+
+shapiro.test(ObesityDS_nno$FAF)
+shapiro.test(ObesityDS_no$FAF) #<- Mejor
+
+shapiro.test(ObesityDS_nno$TUE)
+shapiro.test(ObesityDS_no$TUE)  #<- Mejor
+
+#Revertimos cambios que no hayan sido a mejor
+ObesityDS_nno$FCV <- ObesityDS_no$FCV
+ObesityDS_nno$FAF <- ObesityDS_no$FAF
+ObesityDS_nno$TUE <- ObesityDS_no$TUE
+
+```
+Estandarizamos las variables
+```{r}
+# Estandarización de las variables transformadas
+variables_estandarizar <- c("CH2O", "FAF", "FCV", "NCP", "TUE")
+ObesityDS_nsno <- ObesityDS_nno
+ObesityDS_nsno[variables_estandarizar] <- scale(ObesityDS_nno[variables_estandarizar])
+```
+Generamos un QQ-plot y un histograma para ver como han quedado después de los cambios
+```{r}
+variables_continuas <- ObesityDS_nsno[, c("FCV", "NCP", "CH2O", "FAF", "TUE")]
+
+plot_histogram(variables_continuas)
+plot_qq(variables_continuas)
+```
+
+Vemos una cierta mejoría pero por la naturaleza de algunas variables, pero no tenemos normalidad.
+
+###Aplicación métodos de clústering i Resultados
+
+##K-means
+
+#Aplicación K-means
+Realizaremos un k-means de 3 clústeres siguiendo la literatura
+
+```{r}
+# Definición del número de clústeres
+optimal_k <- 3
+
+# Selección de variables continuas para K-means
+variables_continuas <- ObesityDS_nsno[, c("FCV", "NCP", "CH2O", "FAF", "TUE")]
+
+# Aplicación de K-means con set.seed para tener los mismos datos cada vez
+set.seed(1498635)
+
+kmeans_result <- kmeans(variables_continuas, centers = optimal_k, nstart = 100)
+
+# Añadimow la clasificación del clúster al dataset
+ObesityDS_nsno$Cluster_kmeans3 <- as.factor(kmeans_result$cluster)
+```
+
+#Resultados K-means
+
+Calculamos la clasificación según el porcentaje 
+```{r}
+# Calcular la frecuencia de cada categoría
+conteos <- as.data.frame(table(ObesityDS_nsno$Cluster_kmeans3))
+colnames(conteos) <- c("Categoria", "Frecuencia")
+
+# Calcular el porcentaje
+conteos$Porcentaje <- (conteos$Frecuencia / sum(conteos$Frecuencia)) * 100
+
+# Crear el gráfico de barras con ggplot2
+ggplot(conteos, aes(x=Categoria, y=Frecuencia)) +
+  geom_bar(stat="identity", fill="#440E59") +
+  geom_text(aes(label=paste0(round(Porcentaje, 1), "%")), vjust=-0.5) +
+  ggtitle("Frecuencia y Porcentaje por Categoría") +
+  xlab("Categoría") +
+  ylab("Frecuencia") +
+  theme_minimal()
+
+```
+Revisamos los datos según NOBE de forma agrupada
+```{r}
+# Creamos 2 categorías de peso
+ObesityDS_nsno <- ObesityDS_nsno %>%
+  mutate(Obeyesdad_2 = case_when(
+    NOBE %in% c("Sobrepeso") ~ "Sobrepeso",
+    NOBE %in% c("Obesidad_Tipo_I", "Obesidad_Tipo_II", "Obesidad_Tipo_III") ~ "Obesidad"
+  )) %>%
+  mutate
+```
+
+```{r}
+# Calculamos frecuencias y porcentajes
+frecuencias <- table(ObesityDS_nsno$Cluster_kmeans3, ObesityDS_nsno$Obeyesdad_2)
+porcentajes <- prop.table(frecuencias, margin = 1) * 100
+table(ObesityDS$Obeyesdad_2)
+
+# Preparamos los datos para el plot
+datos <- data.frame(
+  Grupo = factor(1:optimal_k),
+  Sobrepeso = porcentajes[, "Sobrepeso"],
+  Obesidad = porcentajes[, "Obesidad"]
+)
+
+datos_melt <- reshape2 ::melt(datos, id.vars = "Grupo", variable.name = "Categoría", value.name = "Porcentaje")
+
+# Generamos el plot
+ggplot(datos_melt, aes(x = Grupo, y = Porcentaje, fill = Categoría)) +
+  geom_bar(stat = "identity", position = "stack") +
+  labs(x = "Grupo", y = "Porcentaje", fill = "Categoría de Peso") +
+  ggtitle("Composición de Categorías de Peso por Grupo") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = c("#FFD700", "#384E77")) 
+
+```
+Revisamos los resultados según NOBE de forma desagrupada
+```{r}
+# Calculamos frecuencias y porcentajes
+frecuencias <- table(ObesityDS_nsno$Cluster_kmeans3, ObesityDS_nsno$NOBE)
+porcentajes <- prop.table(frecuencias, margin = 1) * 100
+table(ObesityDS$NOBE)
+
+# Preparamos los datos para el plot
+datos <- data.frame(
+  Grupo = factor(1:optimal_k),
+  Sobrepeso = porcentajes[, "Sobrepeso"],
+  Obesidad_Tipo_I = porcentajes[, "Obesidad_Tipo_I"],
+  Obesidad_Tipo_II = porcentajes[, "Obesidad_Tipo_II"],
+  Obesidad_Tipo_III = porcentajes[, "Obesidad_Tipo_III"]
+)
+
+datos_melt <- reshape2 ::melt(datos, id.vars = "Grupo", variable.name = "Categoría", value.name = "Porcentaje")
+
+# Definimos la paleta de colores
+colores_personalizados <- c(
+  "Sobrepeso" = "#FFD700",     
+  "Obesidad_Tipo_I" = "#440E59",   
+  "Obesidad_Tipo_II" = "#35628F",   
+  "Obesidad_Tipo_III" = "#3AAE86"   
+)
+
+# Generamos el plot
+ggplot(datos_melt, aes(x = Grupo, y = Porcentaje, fill = Categoría)) +
+  geom_bar(stat = "identity", position = "stack") +
+  labs(x = "Grupo", y = "Porcentaje", fill = "Categoría de Peso") +
+  ggtitle("Composición de Categorías de Peso por Grupo") +
+  theme_minimal() +
+  theme(legend.position = "bottom") + 
+  scale_fill_manual(values = colores_personalizados) 
+
+```
+
+Revisamos si hay diferencias significativas según el IMC en los clústers
+
+```{r}
+# Visualizamos las diferencias en el IMC según los clústers mediante un boxplot
+ggplot(ObesityDS_nsno, aes(x = Cluster_kmeans3, y = IMC, fill = Cluster_kmeans3)) +
+  geom_boxplot() +
+  labs(title = "Distribución de IMC por Clústeres",
+       x = "Clústeres",
+       y = "IMC") +
+  theme_minimal() + scale_fill_manual(values = c("#FFD700", "#384E77","#3AAE86")) 
+
+# Visualizamos las diferencias en el IMC según los clústers mediante un histograma 
+ggplot(ObesityDS_nsno, aes(x = IMC)) +
+  geom_histogram(aes(y = after_stat(density)), binwidth = 1, fill = "skyblue", color = "white") +
+  facet_wrap(~ Cluster_kmeans3, scales = "fixed") +
+  labs(title = "Distribución de IMC dentro de cada Clúster",
+       x = "IMC",
+       y = "Densidad") +
+  theme_minimal()
+```
+
+Miramos si tenemos Normalidad y Homocedasticidad
+```{r}
+shapiro.test(ObesityDS_nsno$IMC)
+hist(ObesityDS_nsno$IMC, breaks = 10, main = "Histograma", xlab = "Valor", ylab = "Frecuencia")
+qqnorm(ObesityDS_nsno$IMC)
+qqline(ObesityDS_nsno$IMC, col = "red")
+```
+Podemos suponer que tenemos normalidad aunque el test de shapiro falle ya que este es muy sensible a una base de datos grande
+
+```{r}
+leveneTest(ObesityDS_nsno$IMC ~ ObesityDS_nsno$Cluster_kmeans3)
+modelo <- lm(ObesityDS_nsno$IMC ~ ObesityDS_nsno$Cluster_kmeans3)
+plot(modelo$fitted.values, modelo$residuals, main = "Residuos vs Valores Ajustados", xlab = "Valores Ajustados", ylab = "Residuos")
+abline(h = 0, col = "red")
+```
+No tenemos homocedasticidad
+
+No podemos aplicar ANOVA así que usaremos Kruskal-Wallis y realizaremos comparaciones dos a dos mediante Chi-quadrado
+
+```{r}
+# Paso 2: Realizar la prueba de Kruskal-Wallis
+kruskal_test <- kruskal.test(IMC ~ Cluster_kmeans3, data = ObesityDS_nsno)
+print(kruskal_test)
+```
+
+```{r}
+library(ggpubr)
+
+res.kruskal <- ObesityDS_nsno %>% kruskal_test(IMC ~ Cluster_kmeans3)
+res.kruskal
+stat.test <- ObesityDS_nsno %>% dunn_test(IMC ~ Cluster_kmeans3, p.adjust.method = "bonferroni") 
+stat.test
+stat.test <- stat.test %>% add_xy_position(x = "Cluster_kmeans3")
+
+custom_colors <- c("1" = "#92BFB1", "2" = "#DC965A", "3" = "#9E768F")
+
+ggboxplot(ObesityDS_nsno, x = "Cluster_kmeans3", y = "IMC", fill = "Cluster_kmeans3") +
+  scale_fill_manual(values = custom_colors) +
+  stat_pvalue_manual(stat.test, hide.ns = FALSE)
+
+```
+
+PENDIENTE DE REVISAR
+```{r}
+# Paso 3: Realizar la prueba de Dunn
+dunn_resultados <- dunnTest(IMC ~ Cluster_kmeans3, data = ObesityDS_nsno, method = "bonferroni")
+print(dunn_resultados)
+
+# Realizar las ObesityDS_nsno post-hoc con Wilcoxon
+posthoc_result <- ObesityDS_nsno %>%
+  wilcox_test(IMC ~ Cluster_kmeans3, p.adjust.method = "holm")
+
+posthoc_result
+```
+
+##DBSCAN
+
+#Aplicación DBSCAN
+
+Seleccionamos las variables continuas
+```{r}
+variables_continuas <- ObesityDS_nsno %>%
+  select(FCV, NCP, CH2O, FAF, TUE)
+```
+
+Determinamos el parámetro de épsilon (eps)
+```{r}
+# Calculamos las distancias k-vecinas para determinar el parámetro eps
+kNNdistplot(variables_continuas, k = 2 * ncol(variables_continuas)-6)  
+abline(h = 1.05, col = "red", lty = 2)
+```
+Definimos los parámetros y ejecutamos el método
+```{r}
+# Definimos los parámetros del DBSCAN
+eps <- 1.06  
+minPts <- 2 * ncol(variables_continuas)-4
+
+# Aplicamos DBSCAN
+
+# DISTANCIA EUCLIDIANA
+dbscan_result <- dbscan(variables_continuas, eps = eps, minPts = minPts)
+
+# Añadir los clusters identificados por DBSCAN al dataset
+ObesityDS_nsno$Cluster_DBSCAN <- as.factor(dbscan_result$cluster)
+
+# Verificar la asignación de clusters
+table(ObesityDS_nsno$Cluster_DBSCAN)
+
+```
+
+```{r}
+# Calculamos la frecuencia de cada categoría
+conteos <- as.data.frame(table(ObesityDS_nsno$Cluster_DBSCAN))
+colnames(conteos) <- c("Categoria", "Frecuencia")
+
+# Calcular los porcentajes
+conteos$Porcentaje <- (conteos$Frecuencia / sum(conteos$Frecuencia)) * 100
+
+# Generamos un gráfico de barras
+ggplot(conteos, aes(x=Categoria, y=Frecuencia)) +
+  geom_bar(stat="identity", fill="skyblue") +
+  geom_text(aes(label=paste0(round(Porcentaje, 1), "%")), vjust=-0.5) +
+  ggtitle("Frecuencia y Porcentaje por Categoría") +
+  xlab("Categoría") +
+  ylab("Frecuencia") +
+  theme_minimal()
+
+```
+
+
+Filtramos el grupo de ruido para quedarnos con 3 clusters
+```{r}
+# Filtrar grupo ruido
+ObesityDS_nsno_filtered <- ObesityDS_nsno %>%
+  filter(Cluster_DBSCAN != 0) 
+
+# Revisamos la frecuencia de los clusters después de eliminar outliers
+table(ObesityDS_nsno_filtered$Cluster_DBSCAN)
+
+```
+Al ver que agrupa todo en un mismo cluster prácticamente, decidimos usar otras medidas de distancia
+```{r}
+# DISTANCIA MANHATTAN
+dist_matrix <- dist(variables_continuas, method = "manhattan")
+
+# Aplicar DBSCAN con la matriz de distancia
+dbscan_result <- dbscan(as.matrix(dist_matrix), eps = 35, minPts = 2 * ncol(variables_continuas)-5)
+
+dbscan_result
+```
+
+```{r}
+# DISTANCIA CHEBYSHEV
+# Calcular la distancia Chebyshev
+chebyshev_dist <- dist(variables_continuas, method = "maximum")
+
+# Aplicar DBSCAN con la matriz de distancia
+dbscan_result <- dbscan(as.matrix(chebyshev_dist), eps = 15, minPts = 11)
+
+dbscan_result
+```
+En DBSCAN no obtenemos resultados relevantes
